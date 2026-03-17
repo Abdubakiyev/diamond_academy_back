@@ -1,0 +1,233 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//
+// ENUMS
+//
+enum Role {
+  USER
+  ADMIN
+}
+
+enum LevelType {
+  BEGINNER
+  ELEMENTARY
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum AdMediaType {
+  IMAGE
+  VIDEO
+}
+
+enum PaymentStatus {
+  PAID      // To'langan
+  PENDING   // Kutilmoqda
+  PARTIAL   // Qisman to'langan
+  OVERDUE   // Muddati o'tgan
+}
+
+//
+// MODELLAR
+//
+model User {
+  id       String  @id @default(uuid())
+  name     String
+  phone    String  @unique
+  role     Role    @default(USER)
+  isActive Boolean @default(true)
+
+  results TestResult[]
+  ads     Advertisement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 👥 GURUH MODELI
+model Group {
+  id       String  @id @default(uuid())
+  name     String  @unique // Masalan: "17:30 - A1", "19:00 - B2"
+  levelId  String
+  schedule String? // Dars jadvali: "Dush, Chor, Juma"
+  isActive Boolean @default(true)
+
+  level       Level        @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  students    Student[]    // Guruhdagi talabalar
+  attendances Attendance[] // Guruh davomati
+  payments    Payment[]    // Guruh to'lovlari
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([levelId])
+  @@index([isActive])
+}
+
+// 👨‍🎓 TALABA MODELI
+model Student {
+  id       String  @id @default(uuid())
+  name     String  // Talaba to'liq ismi
+  phone    String? // Telefon (ixtiyoriy)
+  groupId  String  // Qaysi guruhda o'qiydi
+  isActive Boolean @default(true)
+
+  group       Group        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  attendances Attendance[] // Talaba davomati
+  payments    Payment[]    // Talaba to'lovlari
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([groupId])
+  @@index([isActive])
+}
+
+model Level {
+  id   String    @id @default(uuid())
+  type LevelType @unique
+
+  tests       Test[]
+  testResults TestResult[]
+  groups      Group[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Test {
+  id       String @id @default(uuid())
+  question String
+
+  optionA String
+  optionB String
+  optionC String
+  optionD String?
+
+  correct String // A | B | C | D
+
+  levelId String
+  level   Level  @relation(fields: [levelId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([levelId])
+}
+
+model TestResult {
+  id String @id @default(uuid())
+
+  userId  String
+  levelId String
+
+  correctCount Int
+  wrongCount   Int
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level Level @relation(fields: [levelId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([levelId])
+  @@index([createdAt])
+}
+
+//
+// 🔐 SAYTGA KIRISH PAROLI
+//
+model AccessCode {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  expiresAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([code])
+  @@index([expiresAt])
+}
+
+//
+// 🎬 REGISTER PANELI REKLAMASI
+//
+model Advertisement {
+  id String @id @default(uuid())
+
+  title       String
+  description String
+  imageUrl    String?
+  mediaType   AdMediaType?
+
+  isActive Boolean @default(false)
+
+  createdBy String
+  admin     User   @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([createdBy])
+}
+
+//
+// 📝 DAVOMAT
+//
+model Attendance {
+  id        String   @id @default(uuid())
+  studentId String   // Talaba ID si
+  groupId   String   // Guruh ID si
+  date      DateTime @db.Date // Faqat sana (vaqtsiz)
+  present   Boolean  @default(false) // Keldi/Kelmadi
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  // Qo'shimcha ma'lumotlar
+  extra Json? // {"marks": 5, "note": "Faol ishtirok etdi", "homework": true}
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, groupId, date]) // Bir talaba bir guruhda bir kunda bitta davomat
+  @@index([studentId])
+  @@index([groupId])
+  @@index([date])
+  @@index([present])
+}
+
+//
+// 💰 OYLIK TO'LOVLAR
+//
+model Payment {
+  id        String        @id @default(uuid())
+  studentId String        // Talaba ID si
+  groupId   String        // Guruh ID si
+  amount    Decimal       @db.Decimal(10, 2) // To'lov summasi
+  status    PaymentStatus @default(PENDING)
+  month     DateTime      @db.Date // Qaysi oy uchun to'lov
+  paidAt    DateTime?     // Qachon to'langan
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  // Qo'shimcha ma'lumotlar
+  extra Json? // {"discount": 50000, "note": "Chegirma berildi", "receipt": "123456"}
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, groupId, month]) // Bir talaba bir guruhda bir oyda bitta to'lov
+  @@index([studentId])
+  @@index([groupId])
+  @@index([status])
+  @@index([month])
+}
