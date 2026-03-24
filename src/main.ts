@@ -21,7 +21,7 @@ async function bootstrap() {
 
   // ✅ any type ishlatish - eng oddiy yechim
   app.enableCors({
-    origin: 'http://localhost:3001',
+    origin: 'https://diamond-academy-phi.vercel.app',
     credentials: true,
   });
 
