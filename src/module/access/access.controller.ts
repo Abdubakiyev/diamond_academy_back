@@ -1,5 +1,5 @@
 // access.controller.ts
-import { Controller, Post, Body, Get, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get } from '@nestjs/common';
 import { AccessService } from './access.service';
 // import { JwtAuthGuard } from '../auth/jwt-auth.guard'; // agar JWT guard bo'lsa
 
