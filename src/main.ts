@@ -22,7 +22,7 @@ async function bootstrap() {
 
   // ✅ any type ishlatish - eng oddiy yechim
   app.enableCors({
-    origin: 'https://diamond-academy-tau.vercel.app',
+    origin: 'https://diamond-academy-eqdn96ln0-abdubakiyevs-projects.vercel.app',
     credentials: true,
   });
   app.useGlobalPipes(
