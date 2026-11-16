@@ -33,7 +33,7 @@ import { Roles } from 'src/core/Guard/roles.decorator';
     @Get('me')
     @ApiOperation({ summary: 'Get own profile' })
     me(@Req() req) {
-      return this.userService.findOne(req.user.sub);
+      return this.userService.findOne(req.user.id);
     }
   
     @Get(':id')

@@ -1,3 +1,15 @@
+// ============================================================================
+// ONLINE O'QUV MARKAZ + MULTILEVEL (CEFR) PLATFORMA — to'liq Prisma schema
+// PostgreSQL | NestJS
+//
+// Tuzilma:
+//   1) Foydalanuvchi, guruh, talaba, davomat, to'lov
+//   2) Kurs -> Dars -> Vazifa (talaba yuboradi, o'qituvchi baholaydi)
+//   3) Daraja aniqlash testi (oddiy)
+//   4) Multilevel imtihon: Exam -> Section -> Part -> Question
+//   5) Topshirish: Attempt -> SectionAttempt -> Answer -> AiEvaluation
+// ============================================================================
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,11 +19,13 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-//
+// ============================================================================
 // ENUMS
-//
+// ============================================================================
+
 enum Role {
   USER
+  TEACHER
   ADMIN
 }
 
@@ -28,60 +42,194 @@ enum AdMediaType {
 }
 
 enum PaymentStatus {
-  PAID      // To'langan
-  PENDING   // Kutilmoqda
-  PARTIAL   // Qisman to'langan
-  OVERDUE   // Muddati o'tgan
+  PAID    // To'langan
+  PENDING // Kutilmoqda
+  PARTIAL // Qisman to'langan
+  OVERDUE // Muddati o'tgan
 }
 
-//
-// MODELLAR
-//
+// ---------- Darslar ----------
+
+enum VideoSource {
+  NONE
+  YOUTUBE  // YouTube havolasi (serverga yuk yo'q)
+  EXTERNAL // Tashqi havola (Vimeo, Bunny, public CDN URL ...)
+  UPLOAD   // Tashqi storage (S3/R2) ga yuklangan fayl — serverda saqlanmaydi
+}
+
+enum SubmissionStatus {
+  SUBMITTED // Yuborilgan, tekshirilmagan
+  GRADED    // Baholangan
+  RETURNED  // Qayta ishlash uchun qaytarilgan
+}
+
+enum FileKind {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  OTHER
+}
+
+// ---------- Multilevel imtihon ----------
+
+enum Skill {
+  LISTENING
+  READING
+  WRITING
+  SPEAKING
+}
+
+enum ExamType {
+  FULL_MULTILEVEL // To'liq multilevel (4 bo'lim)
+  CUSTOM          // Admin yaratgan alohida test (bitta skill yoki aralash), vaqtini admin qo'yadi
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE // A/B/C/D
+  TRUE_FALSE_NG   // True / False / Not Given (javob acceptedAnswers: ["TRUE"] | ["FALSE"] | ["NOT_GIVEN"])
+  SHORT_ANSWER    // Gap fill: bir so'z / raqam (acceptedAnswers)
+  MATCHING        // PartOption bankidan tanlash (speaker->place, paragraph->heading, map label)
+  WRITING_PROMPT  // Writing topshirig'i (AI tekshiradi)
+  SPEAKING_PROMPT // Speaking savoli (AI tekshiradi)
+}
+
+// Partning umumiy formati — admin panelda qaysi forma ochilishini belgilaydi
+enum PartFormat {
+  MCQ                 // A/B/C/D
+  MATCHING_BANK       // Umumiy variantlar banki (A-H): speaker->statement, paragraph->heading
+  MAP_LABELING        // Xarita/rasm bo'yicha joylarni belgilash (rasm + A-H variantlar)
+  TRUE_FALSE_NG       // True / False / Not Given
+  GAP_FILL            // Bo'sh joyni to'ldirish
+  MIXED               // Aralash (masalan MCQ + T/F/NG, yoki gap fill + MCQ)
+  WRITING_TASK        // Writing topshirig'i
+  SPEAKING_INTERVIEW  // Speaking: qisqa shaxsiy savollar
+  SPEAKING_PICTURE    // Speaking: rasm(lar)ni tasvirlash / solishtirish
+  SPEAKING_DISCUSSION // Speaking: mavzu bo'yicha munozara
+}
+
+// Testga kirish huquqi qanday berilgani
+enum ExamAccessType {
+  PAID          // Oddiy foydalanuvchi to'lagan
+  FREE_STAFF    // ADMIN yoki TEACHER (bepul)
+  FREE_STUDENT  // O'quv markazi o'quvchisi (bepul)
+  FREE_EXAM     // Test narxi 0 (bepul test)
+}
+
+enum ExamPaymentStatus {
+  PENDING   // To'lov yaratildi, kutilmoqda
+  PAID      // To'landi
+  FAILED    // Muvaffaqiyatsiz
+  CANCELLED // Bekor qilindi
+  REFUNDED  // Qaytarildi
+}
+
+enum PaymentProvider {
+  CLICK
+  PAYME
+  UZUM
+  MANUAL // Admin qo'lda tasdiqlagan (naqd / karta o'tkazma)
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED // Topshirildi
+  GRADING   // AI tekshiryapti
+  COMPLETED // Natija tayyor
+  EXPIRED   // Vaqt tugadi
+}
+
+enum EvalStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+}
+
+// Multilevel: B1 = 38-50, B2 = 51-64, C1 = 65-75 (o'rtacha ball bo'yicha)
+enum CefrLevel {
+  BELOW_B1
+  B1
+  B2
+  C1
+}
+
+// ============================================================================
+// 1) FOYDALANUVCHI, GURUH, TALABA, DAVOMAT, TO'LOV
+// ============================================================================
+
 model User {
   id       String  @id @default(uuid())
   name     String
   phone    String  @unique
+  password String? 
   role     Role    @default(USER)
   isActive Boolean @default(true)
 
-  results TestResult[]
+  // Admin belgilaydi: true = shu o'quv markazida o'qiydi -> testlar bepul.
+  // false = tashqi foydalanuvchi -> har bir test uchun to'laydi.
+  // (ADMIN va TEACHER rollari har doim bepul, bu maydonga qaramaydi)
+  isCenterStudent Boolean @default(false)
+
+  examPayments ExamPayment[]
+  results      TestResult[]
   ads     Advertisement[]
+
+  student           Student?
+  taughtGroups      Group[]                @relation("GroupTeacher")
+  createdCourses    Course[]               @relation("CourseCreator")
+  submissions       AssignmentSubmission[] @relation("SubmissionAuthor")
+  gradedSubmissions AssignmentSubmission[] @relation("SubmissionGrader")
+  lessonProgress    LessonProgress[]
+  createdExams      Exam[]                 @relation("ExamCreator")
+  examAttempts      ExamAttempt[]
+  reviewedEvals     AiEvaluation[]         @relation("EvalReviewer")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([role])
+  @@index([isActive])
 }
 
-// 👥 GURUH MODELI
+// 👥 GURUH
 model Group {
-  id       String  @id @default(uuid())
-  name     String  @unique // Masalan: "17:30 - A1", "19:00 - B2"
-  levelId  String
-  schedule String? // Dars jadvali: "Dush, Chor, Juma"
-  isActive Boolean @default(true)
+  id        String  @id @default(uuid())
+  name      String  @unique // "17:30 - A1"
+  levelId   String
+  teacherId String? // Guruh o'qituvchisi
+  schedule  String? // "Dush, Chor, Juma"
+  isActive  Boolean @default(true)
 
-  level       Level        @relation(fields: [levelId], references: [id], onDelete: Cascade)
-  students    Student[]    // Guruhdagi talabalar
-  attendances Attendance[] // Guruh davomati
-  payments    Payment[]    // Guruh to'lovlari
+  level       Level         @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  teacher     User?         @relation("GroupTeacher", fields: [teacherId], references: [id], onDelete: SetNull)
+  students    Student[]
+  attendances Attendance[]
+  payments    Payment[]
+  fees        GroupFee[]
+  courses     GroupCourse[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([levelId])
+  @@index([teacherId])
   @@index([isActive])
 }
 
-// 👨‍🎓 TALABA MODELI
+// 👨‍🎓 TALABA
 model Student {
   id       String  @id @default(uuid())
-  name     String  // Talaba to'liq ismi
-  phone    String? // Telefon (ixtiyoriy)
-  groupId  String  // Qaysi guruhda o'qiydi
+  name     String
+  phone    String?
+  groupId  String
+  userId   String? @unique // Talaba saytda akkaunt ochgan bo'lsa bog'lanadi
   isActive Boolean @default(true)
 
   group       Group        @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  attendances Attendance[] // Talaba davomati
-  payments    Payment[]    // Talaba to'lovlari
+  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  attendances Attendance[]
+  payments    Payment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -97,10 +245,277 @@ model Level {
   tests       Test[]
   testResults TestResult[]
   groups      Group[]
+  courses     Course[]
+  exams       Exam[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// 📝 DAVOMAT
+model Attendance {
+  id        String   @id @default(uuid())
+  studentId String
+  groupId   String
+  date      DateTime @db.Date
+  present   Boolean  @default(false)
+  diamond   Boolean  @default(false)
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  extra Json? // {"marks": 5, "note": "...", "homework": true}
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, groupId, date])
+  @@index([studentId])
+  @@index([groupId])
+  @@index([date])
+  @@index([present])
+}
+
+// 💰 OYLIK TO'LOV
+model Payment {
+  id        String        @id @default(uuid())
+  studentId String
+  groupId   String
+  amount    Decimal       @db.Decimal(12, 2)
+  status    PaymentStatus @default(PENDING)
+  month     DateTime      @db.Date // Oyning 1-sanasi sifatida saqlang
+  paidAt    DateTime?
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  extra Json? // {"discount": 50000, "note": "...", "receipt": "123456"}
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, groupId, month])
+  @@index([studentId])
+  @@index([groupId])
+  @@index([status])
+  @@index([month])
+}
+
+// 💎 Guruhning oylik to'lov summasi. Oy uchun yozuv bo'lmasa, oldingi oylardagi oxirgisi amal qiladi.
+model GroupFee {
+  id      String   @id @default(uuid())
+  groupId String
+  month   DateTime @db.Date // oyning 1-sanasi
+  amount  Decimal  @db.Decimal(12, 2)
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([groupId, month])
+  @@index([groupId])
+}
+
+
+// 🔐 SAYTGA KIRISH PAROLI
+model AccessCode {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  expiresAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+// 🎬 REGISTER PANELI REKLAMASI
+model Advertisement {
+  id String @id @default(uuid())
+
+  title       String
+  description String
+  imageUrl    String?
+  mediaType   AdMediaType?
+
+  isActive Boolean @default(false)
+
+  createdBy String
+  admin     User   @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([createdBy])
+}
+
+// ============================================================================
+// 2) KURS -> DARS -> VAZIFA
+// ============================================================================
+
+model Course {
+  id          String  @id @default(uuid())
+  title       String
+  description String?
+  coverUrl    String?
+  levelId     String?
+  isPublished Boolean @default(false)
+  createdById String
+
+  level     Level?        @relation(fields: [levelId], references: [id], onDelete: SetNull)
+  createdBy User          @relation("CourseCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  lessons   Lesson[]
+  groups    GroupCourse[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([levelId])
+  @@index([isPublished])
+  @@index([createdById])
+}
+
+// Qaysi guruh qaysi kursni ko'ra oladi
+model GroupCourse {
+  groupId  String
+  courseId String
+
+  group  Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([groupId, courseId])
+  @@index([courseId])
+}
+
+model Lesson {
+  id          String  @id @default(uuid())
+  courseId    String
+  title       String
+  description String? // Dars matni / konspekt
+  order       Int     @default(0)
+  isPublished Boolean @default(false)
+
+  // Video: YouTube linki yoki tashqi storage. Serverda video fayl saqlanmaydi.
+  videoSource VideoSource @default(NONE)
+  videoUrl    String? // YouTube / tashqi URL
+  videoKey    String? // UPLOAD bo'lsa: storage (S3/R2) obyekt kaliti
+  durationSec Int?
+
+  course      Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  resources   LessonResource[]
+  assignments Assignment[]
+  progress    LessonProgress[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([courseId, order])
+  @@index([courseId])
+}
+
+// Dars materiallari (PDF, rasm, audio ...)
+model LessonResource {
+  id         String   @id @default(uuid())
+  lessonId   String
+  title      String
+  url        String
+  storageKey String?
+  kind       FileKind @default(DOCUMENT)
+
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([lessonId])
+}
+
+model LessonProgress {
+  id          String    @id @default(uuid())
+  userId      String
+  lessonId    String
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, lessonId])
+  @@index([lessonId])
+}
+
+// Dars ichidagi vazifa
+model Assignment {
+  id           String    @id @default(uuid())
+  lessonId     String
+  title        String
+  instructions String
+  maxScore     Int       @default(100)
+  dueDate      DateTime?
+  allowText    Boolean   @default(true)
+  allowFiles   Boolean   @default(true) // rasm, fayl yuklash
+
+  lesson      Lesson                 @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  submissions AssignmentSubmission[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([lessonId])
+}
+
+// O'quvchi yuborgan ish
+model AssignmentSubmission {
+  id           String           @id @default(uuid())
+  assignmentId String
+  userId       String
+  text         String?
+  status       SubmissionStatus @default(SUBMITTED)
+
+  // O'qituvchi bahosi
+  score      Int?
+  feedback   String?
+  gradedById String?
+  gradedAt   DateTime?
+
+  assignment Assignment       @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  user       User             @relation("SubmissionAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  gradedBy   User?            @relation("SubmissionGrader", fields: [gradedById], references: [id], onDelete: SetNull)
+  files      SubmissionFile[]
+
+  submittedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([assignmentId, userId]) // Qayta yuborilsa yangilanadi (status SUBMITTED ga qaytadi)
+  @@index([userId])
+  @@index([status])
+  @@index([gradedById])
+}
+
+model SubmissionFile {
+  id           String   @id @default(uuid())
+  submissionId String
+  url          String
+  storageKey   String?
+  kind         FileKind @default(IMAGE)
+  fileName     String?
+  sizeBytes    Int?
+
+  submission AssignmentSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([submissionId])
+}
+
+// ============================================================================
+// 3) ODDIY DARAJA ANIQLASH TESTI (mavjud)
+// ============================================================================
 
 model Test {
   id       String @id @default(uuid())
@@ -141,93 +556,377 @@ model TestResult {
   @@index([createdAt])
 }
 
+// ============================================================================
+// 4) MULTILEVEL IMTIHON (CEFR) + ALOHIDA TESTLAR
 //
-// 🔐 SAYTGA KIRISH PAROLI
+//   Exam -> ExamSection (skill) -> ExamPart -> Question -> QuestionOption
+//                                          \-> PartOption (umumiy variantlar banki)
 //
-model AccessCode {
-  id        String   @id @default(uuid())
-  code      String   @unique
-  expiresAt DateTime
+// Namuna testlar asosidagi tuzilma (rasmiy emas — admin o'zgartira oladi):
+//   LISTENING (35): P1 MCQ(8) | P2 GAP_FILL(6) | P3 MATCHING_BANK(4)
+//                   P4 MAP_LABELING(5) | P5 MCQ(6, 3 lavha) | P6 GAP_FILL(6)
+//   READING   (35): P1 GAP_FILL(6) | P2 MATCHING_BANK(8) | P3 MATCHING_BANK(6)
+//                   P4 MIXED: MCQ(4)+T/F/NG(5) | P5 MIXED: GAP_FILL(4)+MCQ(2)
+//   WRITING   : 2 ta topshiriq (WRITING_TASK)
+//   SPEAKING  : 3 qism (INTERVIEW / PICTURE / DISCUSSION)
+// ============================================================================
 
-  createdAt DateTime @default(now())
-
-  @@index([code])
-  @@index([expiresAt])
-}
-
-//
-// 🎬 REGISTER PANELI REKLAMASI
-//
-model Advertisement {
-  id String @id @default(uuid())
-
+model Exam {
+  id          String   @id @default(uuid())
   title       String
-  description String
+  description String?
+  type        ExamType @default(FULL_MULTILEVEL)
+  levelId     String?
+  isPublished Boolean  @default(false)
+  archivedAt  DateTime? // O'chirish o'rniga arxivlash (natijalar saqlanib qoladi)
+
+  // CUSTOM testlar uchun umumiy vaqt (daqiqa). Bo'lim/part vaqtlari alohida ham berilishi mumkin.
+  durationMinutes Int?
+
+  // Narx (so'm). 0 = bepul test. Admin har bir test uchun alohida belgilaydi.
+  price Decimal @default(0) @db.Decimal(12, 2)
+
+  createdById String
+
+  payments         ExamPayment[]
+  level            Level?            @relation(fields: [levelId], references: [id], onDelete: SetNull)
+  createdBy        User              @relation("ExamCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  sections         ExamSection[]
+  attempts         ExamAttempt[]
+  scoreConversions ScoreConversion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type])
+  @@index([isPublished])
+  @@index([createdById])
+}
+
+// Listening / Reading / Writing / Speaking
+model ExamSection {
+  id           String  @id @default(uuid())
+  examId       String
+  skill        Skill
+  order        Int     @default(0)
+  title        String?
+  instructions String?
+  timeLimitSec Int? // Bo'lim vaqti (sekund)
+  maxScore     Float   @default(75) // Multilevelda har bir skill 0-75
+
+  exam     Exam             @relation(fields: [examId], references: [id], onDelete: Cascade)
+  parts    ExamPart[]
+  attempts SectionAttempt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([examId, skill])
+  @@index([examId])
+}
+
+// Part 1, Part 2 ...
+model ExamPart {
+  id           String     @id @default(uuid())
+  sectionId    String
+  order        Int        @default(0)
+  title        String? // "Part 1"
+  instructions String?
+  format       PartFormat @default(MCQ)
+  meta         Json? // Partga xos qo'shimcha sozlamalar
+
+  // Listening
+  audioUrl       String?
+  audioKey       String?
+  audioPlayLimit Int     @default(2) // Audio necha marta eshittiriladi (admin o'zgartiradi)
+
+  // Reading matni (gap fill: bo'sh joylar [1], [2] ... bilan belgilanadi)
+  passageText String?
+  // Part uchun umumiy rasm: Listening xaritasi, Reading rasmi, Writing grafigi
   imageUrl    String?
-  mediaType   AdMediaType?
+  imageKey    String?
 
-  isActive Boolean @default(false)
+  // Vaqtlar (sekund)
+  timeLimitSec  Int?
+  prepTimeSec   Int? // Speaking: tayyorlanish
+  answerTimeSec Int? // Speaking: javob berish
 
-  createdBy String
-  admin     User   @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  section   ExamSection  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  questions Question[]
+  options   PartOption[] // MATCHING_BANK / MAP_LABELING uchun umumiy variantlar (A-H)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([isActive])
-  @@index([createdBy])
+  @@unique([sectionId, order])
+  @@index([sectionId])
 }
 
-//
-// 📝 DAVOMAT
-//
-model Attendance {
-  id        String   @id @default(uuid())
-  studentId String   // Talaba ID si
-  groupId   String   // Guruh ID si
-  date      DateTime @db.Date // Faqat sana (vaqtsiz)
-  present   Boolean  @default(false) // Keldi/Kelmadi
+// Part darajasidagi umumiy variantlar banki.
+// Listening: speaker -> joy (A-F), xarita (A-H). Reading: matn -> gap (A-J), paragraph -> sarlavha (A-H).
+// Ortiqcha (distractor) variantlar hech bir savolning javobi bo'lmaydi.
+model PartOption {
+  id       String  @id @default(uuid())
+  partId   String
+  label    String // A, B, C ...
+  text     String
+  imageUrl String?
 
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  part       ExamPart   @relation(fields: [partId], references: [id], onDelete: Cascade)
+  correctFor Question[] @relation("PartOptionCorrect")
+  selectedIn Answer[]   @relation("PartOptionSelected")
 
-  // Qo'shimcha ma'lumotlar
-  extra Json? // {"marks": 5, "note": "Faol ishtirok etdi", "homework": true}
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([studentId, groupId, date]) // Bir talaba bir guruhda bir kunda bitta davomat
-  @@index([studentId])
-  @@index([groupId])
-  @@index([date])
-  @@index([present])
+  @@unique([partId, label])
+  @@index([partId])
 }
 
-//
-// 💰 OYLIK TO'LOVLAR
-//
-model Payment {
-  id        String        @id @default(uuid())
-  studentId String        // Talaba ID si
-  groupId   String        // Guruh ID si
-  amount    Decimal       @db.Decimal(10, 2) // To'lov summasi
-  status    PaymentStatus @default(PENDING)
-  month     DateTime      @db.Date // Qaysi oy uchun to'lov
-  paidAt    DateTime?     // Qachon to'langan
+model Question {
+  id     String       @id @default(uuid())
+  partId String
+  order  Int          @default(0) // Part ichidagi tartib
+  number Int? // Bo'lim bo'yicha ko'rsatiladigan raqam (Q1..Q35)
+  type   QuestionType @default(MULTIPLE_CHOICE)
 
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  text     String // Savol / topshiriq / matn (gap fill: "The cat sat on the ____")
+  audioUrl String? // Savolga alohida audio (lavha, examiner ovozi ...)
+  audioKey String?
+  points   Float   @default(1)
 
-  // Qo'shimcha ma'lumotlar
-  extra Json? // {"discount": 50000, "note": "Chegirma berildi", "receipt": "123456"}
+  // MATCHING: to'g'ri javob = PartOption
+  correctPartOptionId String?
+
+  // SHORT_ANSWER / TRUE_FALSE_NG: to'g'ri javoblar (admin kiritadi)
+  acceptedAnswers String[]
+  caseSensitive   Boolean  @default(false)
+
+  // Savol darajasidagi vaqt (Speaking), part vaqtini bekor qiladi
+  prepTimeSec   Int?
+  answerTimeSec Int?
+
+  // Writing / Speaking
+  minWords Int?
+  maxWords Int?
+  rubric   Json? // AI uchun mezonlar: {"criteria":["task","coherence","lexis","grammar"]}
+
+  // Savolga xos qo'shimcha ma'lumot, masalan:
+  // Writing:  {"taskNo":"1.1","kind":"informal_letter","recipient":"friend"}
+  // Speaking: {"subPart":"1.2","bulletPoints":["..."],"stance":"for"}
+  meta        Json?
+  explanation String?
+
+  part              ExamPart         @relation(fields: [partId], references: [id], onDelete: Cascade)
+  correctPartOption PartOption?      @relation("PartOptionCorrect", fields: [correctPartOptionId], references: [id], onDelete: SetNull)
+  options           QuestionOption[]
+  media             QuestionMedia[] // Bir nechta rasm (rasm solishtirish uchun 2 ta rasm)
+  answers           Answer[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([studentId, groupId, month]) // Bir talaba bir guruhda bir oyda bitta to'lov
-  @@index([studentId])
-  @@index([groupId])
+  @@unique([partId, order])
+  @@index([partId])
+}
+
+// Savolga biriktirilgan rasm/audio/video (Speaking rasm kartalari, Writing grafik)
+model QuestionMedia {
+  id         String   @id @default(uuid())
+  questionId String
+  kind       FileKind @default(IMAGE)
+  url        String
+  storageKey String?
+  caption    String?
+  order      Int      @default(0)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+}
+
+// MULTIPLE_CHOICE variantlari
+model QuestionOption {
+  id         String  @id @default(uuid())
+  questionId String
+  label      String // A, B, C, D
+  text       String
+  isCorrect  Boolean @default(false)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answers  Answer[]
+
+  @@unique([questionId, label])
+  @@index([questionId])
+}
+
+// To'g'ri javoblar sonini (raw) 0-75 shkalaga o'tkazish jadvali.
+// Rasmiy imtihonda Rasch modeli ishlatiladi, shuning uchun jadval admin tomonidan kiritiladi.
+// examId = null bo'lsa umumiy (default) jadval.
+model ScoreConversion {
+  id          String @id @default(uuid())
+  examId      String?
+  skill       Skill
+  rawScore    Int
+  scaledScore Float
+
+  exam Exam? @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, skill, rawScore])
+  @@index([skill])
+}
+
+// ============================================================================
+// 5) TOPSHIRISH VA BAHOLASH
+// Natijalar saqlanib qolishi uchun Exam / Section / Question o'chirilishi
+// topshirilgan urinishlar mavjud bo'lsa bloklanadi (Restrict). Arxivlang.
+// ============================================================================
+
+model ExamAttempt {
+  id     String @id @default(uuid())
+  userId String
+  examId String
+
+  status     AttemptStatus @default(IN_PROGRESS)
+  startedAt  DateTime      @default(now())
+  finishedAt DateTime?
+
+  // Kirish qanday berilgan va (to'langan bo'lsa) qaysi to'lov bilan.
+  // Bitta to'lov = bitta urinish (paymentId unique).
+  accessType ExamAccessType
+  paymentId  String?        @unique
+  payment    ExamPayment?   @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  // Yakuniy natijalar (bo'limlar tayyor bo'lgach hisoblanadi), 0-75
+  listeningScore Float?
+  readingScore   Float?
+  writingScore   Float?
+  speakingScore  Float?
+  totalScore     Float? // To'rt bo'lim o'rtachasi
+  cefrLevel      CefrLevel?
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exam     Exam             @relation(fields: [examId], references: [id], onDelete: Restrict)
+  sections SectionAttempt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([examId])
   @@index([status])
-  @@index([month])
+  @@index([userId, examId])
+}
+
+// 💳 Test uchun to'lov (faqat to'lashi kerak bo'lgan foydalanuvchilar uchun yaratiladi)
+// Oqim: to'lov yaratiladi (PENDING) -> provayder callback -> PAID -> shundan keyin ExamAttempt ochiladi.
+model ExamPayment {
+  id     String @id @default(uuid())
+  userId String
+  examId String
+
+  amount   Decimal           @db.Decimal(12, 2) // To'lov paytidagi narx (Exam.price keyin o'zgarsa ham saqlanadi)
+  currency String            @default("UZS")
+  status   ExamPaymentStatus @default(PENDING)
+  provider PaymentProvider
+
+  providerTxnId String? // Click/Payme tranzaksiya ID si
+  paidAt        DateTime?
+  refundedAt    DateTime?
+  meta          Json? // Provayderdan kelgan xom ma'lumot, izoh, MANUAL uchun tasdiqlagan admin ID
+
+  user    User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  exam    Exam         @relation(fields: [examId], references: [id], onDelete: Restrict)
+  attempt ExamAttempt?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, providerTxnId]) // Bir tranzaksiya ikki marta hisoblanmasin
+  @@index([userId])
+  @@index([examId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Har bir bo'lim uchun alohida taymer (server tomonda tekshiriladi)
+model SectionAttempt {
+  id        String @id @default(uuid())
+  attemptId String
+  sectionId String
+
+  status     AttemptStatus @default(IN_PROGRESS)
+  startedAt  DateTime      @default(now())
+  expiresAt  DateTime? // startedAt + timeLimitSec
+  finishedAt DateTime?
+
+  rawScore  Float? // To'g'ri javoblar soni (Listening / Reading)
+  score     Float? // 0-75 shkaladagi ball
+  maxScore  Float?
+  aiSummary Json? // Bo'lim bo'yicha umumiy tahlil / maslahatlar
+
+  attempt ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  section ExamSection @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  answers Answer[]
+
+  @@unique([attemptId, sectionId])
+  @@index([sectionId])
+}
+
+model Answer {
+  id               String @id @default(uuid())
+  sectionAttemptId String
+  questionId       String
+
+  // Listening / Reading
+  selectedOptionId     String? // MULTIPLE_CHOICE
+  selectedPartOptionId String? // MATCHING
+  textAnswer           String? // SHORT_ANSWER / T-F-NG yoki Writing matni
+  wordCount            Int?
+  isCorrect            Boolean?
+  pointsAwarded        Float?
+
+  // Speaking (audio tashqi storage'da saqlanadi)
+  audioUrl    String?
+  audioKey    String?
+  transcript  String? // STT (masalan Whisper) natijasi
+  durationSec Int?
+
+  sectionAttempt     SectionAttempt  @relation(fields: [sectionAttemptId], references: [id], onDelete: Cascade)
+  question           Question        @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  selectedOption     QuestionOption? @relation(fields: [selectedOptionId], references: [id], onDelete: SetNull)
+  selectedPartOption PartOption?     @relation("PartOptionSelected", fields: [selectedPartOptionId], references: [id], onDelete: SetNull)
+  evaluation         AiEvaluation?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sectionAttemptId, questionId])
+  @@index([questionId])
+}
+
+// 🤖 Writing va Speaking uchun AI baholash
+model AiEvaluation {
+  id       String     @id @default(uuid())
+  answerId String     @unique
+  status   EvalStatus @default(PENDING)
+
+  model        String? // Ishlatilgan AI modeli
+  score        Float? // AI bergan ball
+  criteria     Json? // Writing: task, coherence, lexis, grammar | Speaking: fluency, pronunciation, lexis, grammar
+  feedback     String? // Umumiy tahlil
+  suggestions  String[] // Maslahatlar
+  rawResponse  Json?
+  errorMessage String?
+
+  // O'qituvchi/admin AI bahosini o'zgartirishi mumkin
+  finalScore   Float?
+  reviewedById String?
+  reviewedAt   DateTime?
+
+  answer     Answer @relation(fields: [answerId], references: [id], onDelete: Cascade)
+  reviewedBy User?  @relation("EvalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([reviewedById])
 }

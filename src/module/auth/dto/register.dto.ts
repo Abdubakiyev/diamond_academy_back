@@ -1,4 +1,4 @@
-import { IsString, IsPhoneNumber, IsOptional, IsEnum } from 'class-validator';
+import { IsString, IsPhoneNumber, IsOptional, IsEnum, MinLength, MaxLength} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Role } from '@prisma/client'; // Prisma enum Role
 
@@ -10,6 +10,12 @@ export class RegisterDto {
   @ApiProperty({ example: '+998901234567' })
   @IsPhoneNumber('UZ')
   phone: string;
+
+  @ApiProperty({ example: 'Secret123' })
+  @IsString()
+  @MinLength(8)
+  @MaxLength(72) // bcrypt 72 baytdan keyingisini e'tiborsiz qoldiradi
+  password: string;
 
   @ApiProperty({ example: 'USER', required: false, enum: Role })
   @IsOptional()

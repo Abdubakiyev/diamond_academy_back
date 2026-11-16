@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Body, Patch, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Body,
+  Patch,
+  Param,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { PaymentService } from './payment.service';
 import { Role, PaymentStatus } from '@prisma/client';
 import { JwtAuthGuard } from 'src/core/Guard/JwtGuard';
@@ -14,39 +24,66 @@ export class PaymentController {
   @Roles(Role.ADMIN)
   findAll(
     @Query('status') status?: PaymentStatus,
-    @Query('month') month?: string,
+    @Query('month') month?: string, // "2026-11"
     @Query('studentId') studentId?: string,
     @Query('groupId') groupId?: string,
   ) {
-    return this.paymentService.findAll({
-      status,
-      month: month ? new Date(month) : undefined,
-      studentId,
-      groupId,
-    });
+    return this.paymentService.findAll({ status, month, studentId, groupId });
   }
 
+  // Yangi qator yaratadi (mavjud bo'lsa 409)
   @Post()
   @Roles(Role.ADMIN)
   create(
     @Body()
-    createDto: {
+    dto: {
       studentId: string;
       groupId: string;
       amount: number;
       status: PaymentStatus;
-      month: Date;
-      paidAt?: Date;
+      month: string;
+      paidAt?: string;
       extra?: any;
     },
   ) {
-    return this.paymentService.create(createDto);
+    return this.paymentService.create(dto);
   }
 
+  // Bitta student uchun to'lovni belgilash (yaratadi yoki yangilaydi)
+  @Put('student')
+  @Roles(Role.ADMIN, Role.TEACHER)
+  setStudentPayment(
+    @Body()
+    dto: {
+      studentId: string;
+      groupId: string;
+      month: string; // "2026-11"
+      amount: number;
+      status?: PaymentStatus; // yuborilmasa PAID
+      paidAt?: string;
+      extra?: any;
+    },
+  ) {
+    return this.paymentService.setStudentPayment(dto);
+  }
+
+  // Oy boshida hamma studentga PENDING qator yaratish
   @Post('monthly')
   @Roles(Role.ADMIN)
-  createMonthlyPayments(@Body() createDto: { groupId: string; month: Date; amount: number }) {
-    return this.paymentService.createMonthlyPayments(createDto.groupId, createDto.month, createDto.amount);
+  createMonthlyPayments(
+    @Body() dto: { groupId: string; month: string; amount: number },
+  ) {
+    return this.paymentService.createMonthlyPayments(dto.groupId, dto.month, dto.amount);
+  }
+
+  // Guruhning oylik summasini saqlash (shu oydan boshlab amal qiladi)
+  @Put('group/:groupId/fee')
+  @Roles(Role.ADMIN, Role.TEACHER)
+  setGroupFee(
+    @Param('groupId') groupId: string,
+    @Body() dto: { month: string; amount: number }, // month: "2026-11"
+  ) {
+    return this.paymentService.setGroupFee(groupId, dto.month, dto.amount);
   }
 
   @Patch(':id')
@@ -54,14 +91,24 @@ export class PaymentController {
   update(
     @Param('id') id: string,
     @Body()
-    updateDto: {
+    dto: {
       amount?: number;
       status?: PaymentStatus;
-      paidAt?: Date;
+      paidAt?: string;
       extra?: any;
     },
   ) {
-    return this.paymentService.update(id, updateDto);
+    return this.paymentService.update(id, dto);
+  }
+
+  // Guruh sahifasi: tanlangan oyda har bir student, uning to'lovi va guruh summasi
+  @Get('group/:groupId/month')
+  @Roles(Role.ADMIN, Role.TEACHER)
+  findGroupMonth(
+    @Param('groupId') groupId: string,
+    @Query('month') month: string, // "2026-11"
+  ) {
+    return this.paymentService.findGroupMonth(groupId, month);
   }
 
   @Get('group/:groupId')
@@ -71,13 +118,16 @@ export class PaymentController {
     @Query('month') month?: string,
     @Query('status') status?: PaymentStatus,
   ) {
-    return this.paymentService.findByGroup(groupId, month ? new Date(month) : undefined, status);
+    return this.paymentService.findByGroup(groupId, month, status);
   }
 
   @Get('student/:studentId')
   @Roles(Role.ADMIN)
-  findByStudent(@Param('studentId') studentId: string, @Query('limit') limit?: string) {
-    return this.paymentService.findByStudent(studentId, limit ? parseInt(limit) : 12);
+  findByStudent(
+    @Param('studentId') studentId: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.paymentService.findByStudent(studentId, limit ? parseInt(limit, 10) : 12);
   }
 
   @Get('stats/:groupId')
@@ -87,10 +137,6 @@ export class PaymentController {
     @Query('startMonth') startMonth?: string,
     @Query('endMonth') endMonth?: string,
   ) {
-    return this.paymentService.getGroupStats(
-      groupId,
-      startMonth ? new Date(startMonth) : undefined,
-      endMonth ? new Date(endMonth) : undefined,
-    );
+    return this.paymentService.getGroupStats(groupId, startMonth, endMonth);
   }
 }

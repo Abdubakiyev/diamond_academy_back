@@ -1,5 +1,9 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
-
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PaymentStatus } from '@prisma/client';
 import { PrismaService } from 'src/core/prisma/prisma.service';
 
@@ -7,65 +11,109 @@ import { PrismaService } from 'src/core/prisma/prisma.service';
 export class PaymentService {
   constructor(private prisma: PrismaService) {}
 
+  // Oyni doim oyning 1-sanasiga (UTC yarim tun) keltiradi.
+  // Frontend "2026-11" yoki "2026-11-01" yuborsin (toISOString() ishlatmang).
+  private normalizeMonth(input: string | Date): Date {
+    if (typeof input === 'string') {
+      const m = input.match(/^(\d{4})-(\d{2})/);
+      if (m) {
+        const year = +m[1];
+        const monthIdx = +m[2] - 1;
+        if (monthIdx < 0 || monthIdx > 11) throw new BadRequestException('Oy noto‘g‘ri');
+        return new Date(Date.UTC(year, monthIdx, 1));
+      }
+    }
+    const d = new Date(input);
+    if (isNaN(d.getTime())) throw new BadRequestException('Oy noto‘g‘ri');
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+  }
+
+  private parseDate(input: string | Date, field: string): Date {
+    const d = new Date(input);
+    if (isNaN(d.getTime())) throw new BadRequestException(`${field} noto‘g‘ri`);
+    return d;
+  }
+
+  // Oy uchun amaldagi guruh summasi: shu oy yoki undan oldingi eng oxirgi yozuv
+  private async effectiveFee(groupId: string, month: Date): Promise<number | null> {
+    const fee = await this.prisma.groupFee.findFirst({
+      where: { groupId, month: { lte: month } },
+      orderBy: { month: 'desc' },
+    });
+    return fee ? Number(fee.amount) : null;
+  }
+
+  // Guruh summasini saqlaydi (shu oydan boshlab amal qiladi)
+  async setGroupFee(groupId: string, monthInput: string, amount: number) {
+    if (isNaN(Number(amount)) || Number(amount) <= 0) {
+      throw new BadRequestException('Summa noto‘g‘ri');
+    }
+    const group = await this.prisma.group.findUnique({ where: { id: groupId } });
+    if (!group) throw new NotFoundException('Guruh topilmadi');
+
+    const month = this.normalizeMonth(monthInput);
+    const fee = await this.prisma.groupFee.upsert({
+      where: { groupId_month: { groupId, month } },
+      create: { groupId, month, amount },
+      update: { amount },
+    });
+    return { groupId, month: fee.month, amount: Number(fee.amount) };
+  }
+
   // Barcha to'lovlar
   async findAll(filter?: {
     status?: PaymentStatus;
-    month?: Date;
+    month?: string;
     studentId?: string;
     groupId?: string;
   }) {
     const where: any = {};
-  
+
     if (filter?.status) where.status = filter.status;
     if (filter?.studentId) where.studentId = filter.studentId;
     if (filter?.groupId) where.groupId = filter.groupId;
-    if (filter?.month) where.month = new Date(filter.month);
-  
+    if (filter?.month) where.month = this.normalizeMonth(filter.month);
+
     return this.prisma.payment.findMany({
       where,
-      include: {
-        student: true,
-        group: true,
-      },
+      include: { student: true, group: true },
       orderBy: [{ month: 'desc' }, { student: { name: 'asc' } }],
     });
   }
 
-  // To'lov qo'shish
+  // To'lov qo'shish (faqat yangi qator; mavjud bo'lsa 409)
   async create(data: {
     studentId: string;
     groupId: string;
     amount: number;
     status: PaymentStatus;
-    month: Date;
-    paidAt?: Date;
+    month: string;
+    paidAt?: string;
     extra?: any;
   }) {
     const student = await this.prisma.student.findUnique({
       where: { id: data.studentId },
     });
-
-    if (!student) {
-      throw new NotFoundException('Talaba topilmadi');
-    }
-
+    if (!student) throw new NotFoundException('Talaba topilmadi');
     if (student.groupId !== data.groupId) {
       throw new ConflictException('Talaba bu guruhda emas');
     }
 
-    // Shu oy uchun to'lov mavjudmi?
+    const month = this.normalizeMonth(data.month);
+
     const existing = await this.prisma.payment.findUnique({
       where: {
         studentId_groupId_month: {
           studentId: data.studentId,
           groupId: data.groupId,
-          month: new Date(data.month),
+          month,
         },
       },
     });
-
     if (existing) {
-      throw new ConflictException('Bu oy uchun to\'lov allaqachon mavjud');
+      throw new ConflictException(
+        'Bu oy uchun to‘lov allaqachon mavjud. Yangilash uchun PUT /payment/student dan foydalaning',
+      );
     }
 
     return this.prisma.payment.create({
@@ -74,99 +122,184 @@ export class PaymentService {
         groupId: data.groupId,
         amount: data.amount,
         status: data.status,
-        month: new Date(data.month),
-        paidAt: data.paidAt ? new Date(data.paidAt) : data.status === PaymentStatus.PAID ? new Date() : null,
+        month,
+        paidAt: data.paidAt
+          ? this.parseDate(data.paidAt, 'paidAt')
+          : data.status === PaymentStatus.PAID
+            ? new Date()
+            : null,
         extra: data.extra,
       },
-      include: {
-        student: true,
-        group: true,
-      },
+      include: { student: true, group: true },
     });
   }
 
-  // To'lovni yangilash
+  // Bitta student uchun: qator bo'lsa yangilaydi, bo'lmasa yaratadi
+  async setStudentPayment(data: {
+    studentId: string;
+    groupId: string;
+    month: string;
+    amount: number;
+    status?: PaymentStatus;
+    paidAt?: string;
+    extra?: any;
+  }) {
+    if (
+      data.amount === undefined ||
+      data.amount === null ||
+      isNaN(Number(data.amount)) ||
+      Number(data.amount) < 0
+    ) {
+      throw new BadRequestException('Summa noto‘g‘ri');
+    }
+
+    const student = await this.prisma.student.findUnique({
+      where: { id: data.studentId },
+    });
+    if (!student) throw new NotFoundException('Talaba topilmadi');
+    if (student.groupId !== data.groupId) {
+      throw new ConflictException('Talaba bu guruhda emas');
+    }
+
+    const month = this.normalizeMonth(data.month);
+    const status = data.status ?? PaymentStatus.PAID;
+    const paidAt =
+      status === PaymentStatus.PAID
+        ? data.paidAt
+          ? this.parseDate(data.paidAt, 'paidAt')
+          : new Date()
+        : null;
+
+    return this.prisma.payment.upsert({
+      where: {
+        studentId_groupId_month: {
+          studentId: data.studentId,
+          groupId: data.groupId,
+          month,
+        },
+      },
+      create: {
+        studentId: data.studentId,
+        groupId: data.groupId,
+        amount: data.amount,
+        status,
+        month,
+        paidAt,
+        extra: data.extra,
+      },
+      update: {
+        amount: data.amount,
+        status,
+        paidAt,
+        ...(data.extra !== undefined && { extra: data.extra }),
+      },
+      include: { student: true, group: true },
+    });
+  }
+
+  // To'lovni id bo'yicha yangilash
   async update(
     id: string,
     data: {
       amount?: number;
       status?: PaymentStatus;
-      paidAt?: Date;
+      paidAt?: string;
       extra?: any;
     },
   ) {
     const payment = await this.prisma.payment.findUnique({ where: { id } });
+    if (!payment) throw new NotFoundException('To‘lov topilmadi');
 
-    if (!payment) {
-      throw new NotFoundException('To\'lov topilmadi');
+    const updateData: any = {};
+    if (data.amount !== undefined) updateData.amount = data.amount;
+    if (data.extra !== undefined) updateData.extra = data.extra;
+
+    if (data.status !== undefined) {
+      updateData.status = data.status;
+      if (data.status === PaymentStatus.PAID) {
+        updateData.paidAt = data.paidAt
+          ? this.parseDate(data.paidAt, 'paidAt')
+          : (payment.paidAt ?? new Date());
+      } else if (data.paidAt === undefined) {
+        // PAID dan boshqa holatga qaytarilsa, to'langan sana tozalanadi
+        updateData.paidAt = null;
+      }
     }
-
-    // Agar status PAID ga o'zgartirilsa va paidAt yo'q bo'lsa
-    if (data.status === PaymentStatus.PAID && !payment.paidAt && !data.paidAt) {
-      data.paidAt = new Date();
+    if (data.paidAt !== undefined && data.status === undefined) {
+      updateData.paidAt = this.parseDate(data.paidAt, 'paidAt');
     }
 
     return this.prisma.payment.update({
       where: { id },
-      data,
-      include: {
-        student: true,
-        group: true,
-      },
+      data: updateData,
+      include: { student: true, group: true },
     });
   }
 
   // Guruh bo'yicha to'lovlar
-  async findByGroup(groupId: string, month?: Date, status?: PaymentStatus) {
+  async findByGroup(groupId: string, month?: string, status?: PaymentStatus) {
     const where: any = { groupId };
-
-    if (month) {
-      where.month = new Date(month);
-    }
-
-    if (status) {
-      where.status = status;
-    }
+    if (month) where.month = this.normalizeMonth(month);
+    if (status) where.status = status;
 
     return this.prisma.payment.findMany({
       where,
-      include: {
-        student: true,
-        group: true,
-      },
+      include: { student: true, group: true },
       orderBy: [{ month: 'desc' }, { student: { name: 'asc' } }],
     });
+  }
+
+  // Guruh sahifasi uchun: tanlangan oyda har bir faol student va uning to'lovi
+  // (to'lovi yo'q bo'lsa payment = null) + guruhning amaldagi summasi (fee)
+  async findGroupMonth(groupId: string, monthInput: string) {
+    const month = this.normalizeMonth(monthInput);
+
+    const group = await this.prisma.group.findUnique({
+      where: { id: groupId },
+      include: {
+        students: {
+          where: { isActive: true },
+          orderBy: { name: 'asc' },
+          include: { payments: { where: { groupId, month } } },
+        },
+      },
+    });
+    if (!group) throw new NotFoundException('Guruh topilmadi');
+
+    return {
+      groupId: group.id,
+      month,
+      fee: await this.effectiveFee(groupId, month), // yo'q bo'lsa null
+      students: group.students.map(({ payments, ...student }) => ({
+        ...student,
+        payment: payments[0] ?? null,
+      })),
+    };
   }
 
   // Talaba to'lovlari
   async findByStudent(studentId: string, limit = 12) {
     return this.prisma.payment.findMany({
       where: { studentId },
-      include: {
-        group: true,
-      },
-      orderBy: {
-        month: 'desc',
-      },
+      include: { group: true },
+      orderBy: { month: 'desc' },
       take: limit,
     });
   }
 
   // To'lov statistikasi
-  async getGroupStats(groupId: string, startMonth?: Date, endMonth?: Date) {
+  async getGroupStats(groupId: string, startMonth?: string, endMonth?: string) {
     const where: any = { groupId };
 
     if (startMonth || endMonth) {
       where.month = {};
-      if (startMonth) where.month.gte = new Date(startMonth);
-      if (endMonth) where.month.lte = new Date(endMonth);
+      if (startMonth) where.month.gte = this.normalizeMonth(startMonth);
+      if (endMonth) where.month.lte = this.normalizeMonth(endMonth);
     }
 
     const payments = await this.prisma.payment.findMany({
       where,
-      include: {
-        student: true,
-      },
+      include: { student: true },
     });
 
     const stats = {
@@ -190,6 +323,7 @@ export class PaymentService {
           stats.paidCount++;
           break;
         case PaymentStatus.PENDING:
+        case PaymentStatus.PARTIAL: // Partial pending ga qo'shiladi
           stats.pendingAmount += amount;
           stats.pendingCount++;
           break;
@@ -197,57 +331,44 @@ export class PaymentService {
           stats.overdueAmount += amount;
           stats.overdueCount++;
           break;
-        case PaymentStatus.PARTIAL:
-          // Partial ni pending ga qo'shamiz
-          stats.pendingAmount += amount;
-          stats.pendingCount++;
-          break;
       }
     });
 
     return stats;
   }
 
-  // Har oy uchun to'lov yaratish (barcha talabalar)
-  async createMonthlyPayments(groupId: string, month: Date, amount: number) {
+  // Oy boshida: guruhdagi barcha faol studentlarga PENDING qator yaratadi.
+  // Mavjud qatorlarga tegmaydi (to'langanlar o'zgarmaydi).
+  async createMonthlyPayments(groupId: string, monthInput: string, amount: number) {
     const group = await this.prisma.group.findUnique({
       where: { id: groupId },
-      include: {
-        students: {
-          where: { isActive: true },
-        },
-      },
+      include: { students: { where: { isActive: true } } },
     });
+    if (!group) throw new NotFoundException('Guruh topilmadi');
 
-    if (!group) {
-      throw new NotFoundException('Guruh topilmadi');
-    }
+    const month = this.normalizeMonth(monthInput);
 
-    const results = await Promise.all(
+    return this.prisma.$transaction(
       group.students.map((student) =>
         this.prisma.payment.upsert({
           where: {
             studentId_groupId_month: {
               studentId: student.id,
-              groupId: groupId,
-              month: new Date(month),
+              groupId,
+              month,
             },
           },
           create: {
             studentId: student.id,
-            groupId: groupId,
-            amount: amount,
+            groupId,
+            amount,
             status: PaymentStatus.PENDING,
-            month: new Date(month),
+            month,
           },
           update: {},
-          include: {
-            student: true,
-          },
+          include: { student: true },
         }),
       ),
     );
-
-    return results;
   }
 }

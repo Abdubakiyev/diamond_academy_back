@@ -1,8 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { RegisterDto } from './dto/register.dto';
+import * as bcrypt from 'bcrypt';
 import { Role } from '@prisma/client';
 import { PrismaService } from 'src/core/prisma/prisma.service';
+import { RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
@@ -12,33 +17,38 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto) {
-    // oldin telefon orqali user mavjudligini tekshirish
     let user = await this.prisma.user.findUnique({
       where: { phone: dto.phone },
     });
 
     if (!user) {
-      // agar role yuborilgan bo'lsa o'shani, yo'q bo'lsa USER
-      const role = dto.role ?? Role.USER;
+      // Yangi user: ro'yxatdan o'tish
+      if (!dto.name?.trim()) {
+        throw new BadRequestException('Ism kiritilishi shart');
+      }
 
       user = await this.prisma.user.create({
         data: {
-          name: dto.name,
+          name: dto.name.trim(),
           phone: dto.phone,
-          role: role,
+          password: await bcrypt.hash(dto.password, 10),
+          role: Role.USER, // rolni foydalanuvchi tanlay olmaydi
         },
       });
+    } else {
+      // Mavjud user: kirish, parol tekshiriladi
+      const invalid = new UnauthorizedException('Telefon yoki parol noto‘g‘ri');
+
+      if (!user.isActive || !user.password) throw invalid;
+
+      const ok = await bcrypt.compare(dto.password, user.password);
+      if (!ok) throw invalid;
     }
 
-    const payload = {
-      sub: user.id,
-      role: user.role,
-    };
-
-    const accessToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: '1d',
-    });
+    const accessToken = this.jwtService.sign(
+      { sub: user.id, role: user.role },
+      { secret: process.env.JWT_SECRET, expiresIn: '1d' },
+    );
 
     return {
       accessToken,
@@ -47,10 +57,7 @@ export class AuthService {
         name: user.name,
         role: user.role,
       },
-      redirect:
-        user.role === Role.ADMIN
-          ? '/diamond-academy/admin'
-          : '/',
+      redirect: user.role === Role.ADMIN ? '/diamond-academy/admin' : '/',
     };
   }
 }

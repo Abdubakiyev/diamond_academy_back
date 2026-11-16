@@ -5,6 +5,7 @@ import * as dotenv from 'dotenv';
 import { randomUUID } from 'crypto';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
+import { ValidationPipe } from '@nestjs/common';
 
 async function bootstrap() {
   if (!(global as any).crypto) {
@@ -21,9 +22,15 @@ async function bootstrap() {
 
   // ✅ any type ishlatish - eng oddiy yechim
   app.enableCors({
-    origin: 'https://diamond-academy-tau.vercel.app',
+    origin: 'http://localhost:3001',
     credentials: true,
   });
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true, // <-- shu qator kerak: @Type(() => Number) ishlashi uchun
+    }),
+  );
 
   const config = new DocumentBuilder()
     .setTitle('Diamond Academy API')
