@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { timingSafeEqual } from 'crypto';
 import { Role } from '@prisma/client';
 import { PrismaService } from 'src/core/prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
@@ -15,6 +16,18 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
   ) {}
+
+  // adminKey ni ADMIN_SECRET bilan xavfsiz solishtiradi
+  private isValidAdminKey(adminKey?: string): boolean {
+    const secret = process.env.ADMIN_SECRET;
+    if (!secret || !adminKey) return false;
+
+    const a = Buffer.from(adminKey);
+    const b = Buffer.from(secret);
+    if (a.length !== b.length) return false;
+
+    return timingSafeEqual(a, b);
+  }
 
   async register(dto: RegisterDto) {
     let user = await this.prisma.user.findUnique({
@@ -32,7 +45,8 @@ export class AuthService {
           name: dto.name.trim(),
           phone: dto.phone,
           password: await bcrypt.hash(dto.password, 10),
-          role: Role.USER, // rolni foydalanuvchi tanlay olmaydi
+          // Admin faqat to'g'ri maxfiy kalit bilan; aks holda har doim USER
+          role: this.isValidAdminKey(dto.adminKey) ? Role.ADMIN : Role.USER,
         },
       });
     } else {

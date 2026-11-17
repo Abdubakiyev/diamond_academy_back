@@ -1,6 +1,11 @@
-import { IsString, IsPhoneNumber, IsOptional, IsEnum, MinLength, MaxLength} from 'class-validator';
+import {
+  IsOptional,
+  IsPhoneNumber,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
-import { Role } from '@prisma/client'; // Prisma enum Role
 
 export class RegisterDto {
   @ApiProperty({ example: 'Ali' })
@@ -17,8 +22,12 @@ export class RegisterDto {
   @MaxLength(72) // bcrypt 72 baytdan keyingisini e'tiborsiz qoldiradi
   password: string;
 
-  @ApiProperty({ example: 'USER', required: false, enum: Role })
+  @ApiProperty({
+    required: false,
+    description: 'Faqat birinchi adminni yaratish uchun maxfiy kalit (ADMIN_SECRET)',
+  })
   @IsOptional()
-  @IsEnum(Role, { message: 'role must be USER or ADMIN' })
-  role?: Role;
+  @IsString()
+  @MaxLength(200)
+  adminKey?: string;
 }
