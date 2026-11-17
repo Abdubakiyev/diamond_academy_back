@@ -11,28 +11,35 @@ export class AttendanceController {
   constructor(private readonly attendanceService: AttendanceService) {}
 
   @Post('bulk')
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.TEACHER)
   createBulk(
     @Body()
     createDto: {
       groupId: string;
-      date: Date;
-      attendances: Array<{ studentId: string; present: boolean; extra?: any }>;
+      date: string;
+      attendances: Array<{ studentId: string; present: boolean; diamond?: boolean; extra?: any }>;
     },
   ) {
     return this.attendanceService.createBulk(createDto);
   }
 
   @Get('group/:groupId/date/:date')
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.TEACHER)
   findByGroupAndDate(@Param('groupId') groupId: string, @Param('date') date: string) {
     return this.attendanceService.findByGroupAndDate(groupId, new Date(date));
+  }
+
+  // Oy bo'yicha diamondlar soni: ?month=2026-11
+  @Get('diamonds/:groupId')
+  @Roles(Role.ADMIN, Role.TEACHER)
+  diamondStats(@Param('groupId') groupId: string, @Query('month') month: string) {
+    return this.attendanceService.diamondStats(groupId, month);
   }
 
   @Get('student/:studentId')
   @Roles(Role.ADMIN)
   findByStudent(@Param('studentId') studentId: string, @Query('limit') limit?: string) {
-    return this.attendanceService.findByStudent(studentId, limit ? parseInt(limit) : 20);
+    return this.attendanceService.findByStudent(studentId, limit ? parseInt(limit, 10) : 20);
   }
 
   @Get('stats/:groupId')
