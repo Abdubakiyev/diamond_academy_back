@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'src/core/prisma/prisma.service';
-
+import { linkUserForStudent } from 'src/common/student-link';
 
 @Injectable()
 export class StudentService {
@@ -16,15 +16,20 @@ export class StudentService {
       throw new NotFoundException('Guruh topilmadi');
     }
 
-    return this.prisma.student.create({
+    const created = await this.prisma.student.create({
       data: {
         name: data.name,
         phone: data.phone,
         groupId: data.groupId,
       },
-      include: {
-        group: true,
-      },
+    });
+
+    // Shu telefon bilan ro'yxatdan o'tgan User bo'lsa, bog'laymiz
+    await linkUserForStudent(this.prisma, created.id, data.phone);
+
+    return this.prisma.student.findUnique({
+      where: { id: created.id },
+      include: { group: true },
     });
   }
 
@@ -105,13 +110,24 @@ export class StudentService {
       }
     }
 
-    return this.prisma.student.update({
+    const updated = await this.prisma.student.update({
       where: { id },
       data,
       include: {
         group: true,
       },
     });
+
+    // Telefon berilgan va hali akkauntga bog'lanmagan bo'lsa, bog'lashga urinamiz
+    if (data.phone && !updated.userId) {
+      await linkUserForStudent(this.prisma, id, data.phone);
+      return this.prisma.student.findUnique({
+        where: { id },
+        include: { group: true },
+      });
+    }
+
+    return updated;
   }
 
   // O'chirish

@@ -9,6 +9,7 @@ import { timingSafeEqual } from 'crypto';
 import { Role } from '@prisma/client';
 import { PrismaService } from 'src/core/prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
+import { linkStudentByPhone } from 'src/common/student-link';
 
 @Injectable()
 export class AuthService {
@@ -57,6 +58,10 @@ export class AuthService {
 
       const ok = await bcrypt.compare(dto.password, user.password);
       if (!ok) throw invalid;
+    }
+        // Markaz o'quvchisi bo'lsa (telefon bo'yicha) Student bilan bog'laymiz
+    if (user.role === Role.USER) {
+      await linkStudentByPhone(this.prisma, user.id, user.phone);
     }
 
     const accessToken = this.jwtService.sign(
