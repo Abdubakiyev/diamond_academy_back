@@ -19,7 +19,7 @@ import { ListEvaluationsQueryDto } from './dto/list-evaluations-query.dto';
 import { ReviewEvaluationDto } from './dto/review-evaluation.dto';
 import { SttService } from './stt.service';
 
-const RETRY_DELAYS_MS = [5_000, 20_000]; // jami 3 ta urinish
+const RETRY_DELAYS_MS = [5_000, 15_000, 45_000, 120_000]; // jami 5 ta urinish // jami 3 ta urinish
 const READ_URL_TTL = 60 * 60;
 
 const DEFAULT_CRITERIA: Record<'WRITING' | 'SPEAKING', string[]> = {
