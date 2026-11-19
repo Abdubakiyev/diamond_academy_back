@@ -27,6 +27,7 @@ enum Role {
   USER
   TEACHER
   ADMIN
+  PARENT
 }
 
 enum LevelType {
@@ -46,6 +47,13 @@ enum PaymentStatus {
   PENDING // Kutilmoqda
   PARTIAL // Qisman to'langan
   OVERDUE // Muddati o'tgan
+}
+
+// Ota-ona o'quvchiga bog'lanish so'rovining holati
+enum ParentLinkStatus {
+  PENDING  // Admin tasdiqlashi kutilmoqda
+  APPROVED // Tasdiqlangan: ota-ona statistikani ko'ra oladi
+  REJECTED // Rad etilgan
 }
 
 // ---------- Darslar ----------
@@ -176,6 +184,7 @@ model User {
   ads     Advertisement[]
 
   student           Student?
+  parentLinks       ParentStudent[] 
   taughtGroups      Group[]                @relation("GroupTeacher")
   createdCourses    Course[]               @relation("CourseCreator")
   submissions       AssignmentSubmission[] @relation("SubmissionAuthor")
@@ -230,12 +239,35 @@ model Student {
   user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
   attendances Attendance[]
   payments    Payment[]
+  parentLinks ParentStudent[] 
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([groupId])
   @@index([isActive])
+}
+
+// 👪 OTA-ONA ↔ O'QUVCHI
+// Ota-ona ro'yxatdan o'tadi, guruh va o'quvchini tanlaydi -> so'rov yaratiladi.
+// APPROVED bo'lgandagina o'sha o'quvchining statistikasini ko'ra oladi.
+model ParentStudent {
+  id         String           @id @default(uuid())
+  parentId   String
+  studentId  String
+  status     ParentLinkStatus @default(PENDING)
+  approvedAt DateTime?
+
+  parent  User    @relation(fields: [parentId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([parentId, studentId]) // Bir ota-ona bir o'quvchiga ikki marta so'rov yubormasin
+  @@index([parentId])
+  @@index([studentId])
+  @@index([status])
 }
 
 model Level {
