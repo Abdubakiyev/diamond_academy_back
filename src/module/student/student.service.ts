@@ -142,4 +142,129 @@ export class StudentService {
       where: { id },
     });
   }
+    // O'quvchining o'z statistikasi (kirgan user bo'yicha)
+  async myStats(userId: string) {
+    const student = await this.prisma.student.findUnique({
+      where: { userId },
+      include: { group: { include: { level: true } } },
+    });
+
+    // Akkaunt hali o'quvchi yozuviga bog'lanmagan (markaz o'quvchisi emas)
+    if (!student) return { isStudent: false as const };
+
+    // Tashkent vaqti (UTC+5) bo'yicha joriy oyning 1-sanasi
+    const local = new Date(Date.now() + 5 * 60 * 60 * 1000);
+    const currentMonth = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1));
+
+    const [attendances, payments, fee, attempts] = await Promise.all([
+      this.prisma.attendance.findMany({
+        where: { studentId: student.id },
+        orderBy: { date: 'desc' },
+        select: { date: true, present: true, diamond: true, extra: true },
+      }),
+      this.prisma.payment.findMany({
+        where: { studentId: student.id },
+        orderBy: { month: 'desc' },
+        take: 12,
+        select: { id: true, month: true, amount: true, status: true, paidAt: true },
+      }),
+      this.prisma.groupFee.findFirst({
+        where: { groupId: student.groupId, month: { lte: currentMonth } },
+        orderBy: { month: 'desc' },
+      }),
+      this.prisma.examAttempt.findMany({
+        where: { userId, status: { not: 'IN_PROGRESS' } },
+        orderBy: { startedAt: 'desc' },
+        take: 20,
+        select: {
+          id: true,
+          status: true,
+          startedAt: true,
+          finishedAt: true,
+          listeningScore: true,
+          readingScore: true,
+          writingScore: true,
+          speakingScore: true,
+          totalScore: true,
+          cefrLevel: true,
+          exam: { select: { id: true, title: true } },
+        },
+      }),
+    ]);
+
+    // Davomat
+    const total = attendances.length;
+    const present = attendances.filter((a) => a.present).length;
+    const diamonds = attendances.filter((a) => a.diamond).length;
+
+    // Joriy oy to'lovi
+    const currentPayment = payments.find((p) => p.month.getTime() === currentMonth.getTime());
+    const feeAmount = fee ? Number(fee.amount) : null;
+
+    // Imtihonlar
+    const done = attempts.filter((a) => a.totalScore !== null);
+    const best = done.reduce<number | null>(
+      (m, a) => (a.totalScore !== null && (m === null || a.totalScore > m) ? a.totalScore : m),
+      null,
+    );
+
+    return {
+      isStudent: true as const,
+      student: {
+        id: student.id,
+        name: student.name,
+        phone: student.phone,
+        isActive: student.isActive,
+        group: { id: student.group.id, name: student.group.name, schedule: student.group.schedule },
+        level: student.group.level?.type ?? null,
+      },
+      attendance: {
+        total,
+        present,
+        absent: total - present,
+        rate: total ? Math.round((present / total) * 100) : null, // foiz
+        recent: attendances.slice(0, 30).map((a) => ({
+          date: a.date,
+          present: a.present,
+          diamond: a.diamond,
+        })),
+      },
+      diamonds, // jami olmoslar soni
+      payment: {
+        currentMonth: {
+          month: currentMonth,
+          // status null = bu oy uchun yozuv yo'q
+          status: currentPayment?.status ?? null,
+          amount: currentPayment ? Number(currentPayment.amount) : feeAmount,
+          paidAt: currentPayment?.paidAt ?? null,
+        },
+        history: payments.map((p) => ({
+          id: p.id,
+          month: p.month,
+          amount: Number(p.amount),
+          status: p.status,
+          paidAt: p.paidAt,
+        })),
+      },
+      exams: {
+        count: done.length,
+        bestScore: best,
+        lastCefr: done[0]?.cefrLevel ?? null,
+        attempts: attempts.map((a) => ({
+          id: a.id,
+          examId: a.exam.id,
+          title: a.exam.title,
+          status: a.status,
+          startedAt: a.startedAt,
+          finishedAt: a.finishedAt,
+          listening: a.listeningScore,
+          reading: a.readingScore,
+          writing: a.writingScore,
+          speaking: a.speakingScore,
+          total: a.totalScore,
+          cefr: a.cefrLevel,
+        })),
+      },
+    };
+  }
 }

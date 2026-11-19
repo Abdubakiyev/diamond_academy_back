@@ -4,11 +4,19 @@ import { Role } from '@prisma/client';
 import { JwtAuthGuard } from 'src/core/Guard/JwtGuard';
 import { RolesGuard } from 'src/core/Guard/roles.guard';
 import { Roles } from 'src/core/Guard/roles.decorator';
+import { CurrentUser } from 'src/common/current-user.decorator';
 
 @Controller('student')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class StudentController {
   constructor(private readonly studentService: StudentService) {}
+
+  // O'quvchi o'z statistikasini ko'radi. ':id' dan OLDIN turishi shart!
+  @Get('me/stats')
+  @Roles(Role.USER, Role.TEACHER, Role.ADMIN)
+  myStats(@CurrentUser('id') userId: string) {
+    return this.studentService.myStats(userId);
+  }
 
   @Post()
   @Roles(Role.ADMIN)
