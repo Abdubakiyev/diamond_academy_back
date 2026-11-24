@@ -1,6 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/core/prisma/prisma.service';
 import { linkUserForStudent } from 'src/common/student-link';
+
+type StudentWithGroup = Prisma.StudentGetPayload<{ include: { group: { include: { level: true } } } }>;
 
 @Injectable()
 export class StudentService {
@@ -142,7 +145,10 @@ export class StudentService {
       where: { id },
     });
   }
-    // O'quvchining o'z statistikasi (kirgan user bo'yicha)
+
+  /* ───────────── Statistika ───────────── */
+
+  // O'quvchining o'z statistikasi (kirgan user bo'yicha)
   async myStats(userId: string) {
     const student = await this.prisma.student.findUnique({
       where: { userId },
@@ -152,6 +158,21 @@ export class StudentService {
     // Akkaunt hali o'quvchi yozuviga bog'lanmagan (markaz o'quvchisi emas)
     if (!student) return { isStudent: false as const };
 
+    return this.buildStats(student);
+  }
+
+  // Ota-ona uchun: o'quvchi id bo'yicha (ruxsatni chaqiruvchi tekshiradi!)
+  async statsByStudentId(studentId: string) {
+    const student = await this.prisma.student.findUnique({
+      where: { id: studentId },
+      include: { group: { include: { level: true } } },
+    });
+    if (!student) throw new NotFoundException('Talaba topilmadi');
+
+    return this.buildStats(student);
+  }
+
+  private async buildStats(student: StudentWithGroup) {
     // Tashkent vaqti (UTC+5) bo'yicha joriy oyning 1-sanasi
     const local = new Date(Date.now() + 5 * 60 * 60 * 1000);
     const currentMonth = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1));
@@ -172,8 +193,9 @@ export class StudentService {
         where: { groupId: student.groupId, month: { lte: currentMonth } },
         orderBy: { month: 'desc' },
       }),
+      // O'quvchining saytda akkaunti bo'lmasa, imtihonlar bo'sh qaytadi
       this.prisma.examAttempt.findMany({
-        where: { userId, status: { not: 'IN_PROGRESS' } },
+        where: { userId: student.userId ?? 'no-user', status: { not: 'IN_PROGRESS' } },
         orderBy: { startedAt: 'desc' },
         take: 20,
         select: {

@@ -26,11 +26,14 @@ import { GroupBoardModule } from './module/group-board/group-board.module';
 import { ExamPartModule } from './module/exam-part/exam-part.module';
 import { QuestionModule } from './module/question/question.module';
 import { ScoringModule } from './module/scoring/scoring.module';
+import { ParentModule } from './module/parent/parent.module';
+
 @Module({
   imports: [ScheduleModule.forRoot(),
-    AccessModule,AuthModule, UserModule, LevelModule, TestModule, TestResultModule, PrismaModule, attendanceModule, AdvertisementModule , PaymentModule, StudentModule, GroupModule, CourseModule, LessonModule, AssignmentModule, ExamModule, ExamAttemptModule, ExamPaymentModule, AiEvaluationModule, StorageModule,GroupBoardModule, GroupBoardModule, ExamPartModule, QuestionModule, ScoringModule],
+    AccessModule,AuthModule, UserModule, LevelModule, TestModule, TestResultModule, PrismaModule, attendanceModule, AdvertisementModule , PaymentModule, StudentModule, GroupModule, CourseModule, LessonModule, AssignmentModule, ExamModule, ExamAttemptModule, ExamPaymentModule, AiEvaluationModule, StorageModule,GroupBoardModule, GroupBoardModule, ExamPartModule, QuestionModule, ScoringModule, ParentModule],
   controllers: [AppController],
   providers: [PrismaService],
   exports: [PrismaService],
 })
-export class AppModule {}
+export class AppModule {}import { ParentModule } from './module/parent/parent.module';
+
