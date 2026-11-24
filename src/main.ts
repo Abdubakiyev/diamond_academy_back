@@ -22,9 +22,13 @@ async function bootstrap() {
 
   // ✅ any type ishlatish - eng oddiy yechim
   app.enableCors({
-    origin: 'https://diamond-academy-tau.vercel.app',
+    origin: [
+      'https://diamond-academy-tau.vercel.app',
+      'https://diamond-academy-parent.vercel.app',
+    ],
     credentials: true,
   });
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
