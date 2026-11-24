@@ -35,5 +35,4 @@ import { ParentModule } from './module/parent/parent.module';
   providers: [PrismaService],
   exports: [PrismaService],
 })
-export class AppModule {}import { ParentModule } from './module/parent/parent.module';
-
+export class AppModule {}
