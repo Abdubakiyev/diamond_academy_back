@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { AttemptStatus, EvalStatus, FileKind, Prisma, Role, Skill } from '@prisma/client';
 import type { AuthUser } from '../../common/current-user.decorator';
-import { weightedAverage, round1 } from '../../common/scoring';
+import { average, weightedAverage, round1, WRITING_TASK_WEIGHTS } from '../../common/scoring';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { ScoringService } from '../scoring/scoring.service';
 import { StorageService } from '../storage/storage.service';
@@ -273,18 +273,59 @@ export class AiEvaluationService implements OnModuleInit {
   /* ───────────── Bo'lim balini hisoblash ───────────── */
 
   /**
-   * Bo'limdagi HAMMA javobning baholashi DONE bo'lsa: bo'lim bali = savollar bali (points) bo'yicha vaznli o'rtacha
-   * (final ball bor bo'lsa u, aks holda AI bali; javob berilmagan savol = 0). Keyin umumiy natija yangilanadi.
+   * Writing: 2 ta topshiriq bo'lsa Task 1 = 33%, Task 2 = 67% (24.75 + 50.25 = 75).
+   * Speaking: har bir part alohida baholanadi, partlar o'rtachasi olinadi (jami 75).
+   * Boshqa holatlarda: savollar bali (points) bo'yicha vaznli o'rtacha (eski usul).
+   * Savolning bali: ustoz tuzatgan (finalScore) bo'lsa shu, aks holda AI bali; javob yo'q = 0.
+   */
+  private computeSectionScore(
+    skill: Skill,
+    questions: { id: string; points: number; order: number; partId: string; part: { order: number } }[],
+    byQuestion: Map<string, { finalScore: number | null; score: number | null } | null>,
+  ): number {
+    const valueOf = (id: string) => {
+      const ev = byQuestion.get(id);
+      return ev ? (ev.finalScore ?? ev.score ?? 0) : 0;
+    };
+    const weightOf = (q: { points: number }) => (q.points > 0 ? q.points : 1);
+
+    const sorted = [...questions].sort((a, b) => a.part.order - b.part.order || a.order - b.order);
+
+    if (skill === Skill.WRITING && sorted.length === 2) {
+      return round1(
+        valueOf(sorted[0].id) * WRITING_TASK_WEIGHTS.TASK_1 + valueOf(sorted[1].id) * WRITING_TASK_WEIGHTS.TASK_2,
+      );
+    }
+
+    if (skill === Skill.SPEAKING) {
+      const parts = new Map<string, { order: number; items: { value: number; weight: number }[] }>();
+      for (const q of sorted) {
+        const p = parts.get(q.partId) ?? { order: q.part.order, items: [] };
+        p.items.push({ value: valueOf(q.id), weight: weightOf(q) });
+        parts.set(q.partId, p);
+      }
+      return average([...parts.values()].map((p) => weightedAverage(p.items) ?? 0)) ?? 0;
+    }
+
+    return weightedAverage(sorted.map((q) => ({ value: valueOf(q.id), weight: weightOf(q) }))) ?? 0;
+  }
+
+  /**
+   * Bo'limdagi HAMMA javobning baholashi DONE bo'lsa: bo'lim bali hisoblanadi (computeSectionScore).
+   * Keyin umumiy natija yangilanadi.
    */
   async refreshSection(sectionAttemptId: string) {
     const sa = await this.prisma.sectionAttempt.findUnique({
       where: { id: sectionAttemptId },
-      select: { id: true, sectionId: true, finishedAt: true },
+      select: { id: true, sectionId: true, finishedAt: true, section: { select: { skill: true } } },
     });
     if (!sa) return { finalized: false };
 
     const [questions, answers] = await Promise.all([
-      this.prisma.question.findMany({ where: { part: { sectionId: sa.sectionId } }, select: { id: true, points: true } }),
+      this.prisma.question.findMany({
+        where: { part: { sectionId: sa.sectionId } },
+        select: { id: true, points: true, order: true, partId: true, part: { select: { order: true } } },
+      }),
       this.prisma.answer.findMany({
         where: { sectionAttemptId },
         select: {
@@ -298,11 +339,7 @@ export class AiEvaluationService implements OnModuleInit {
     if (waiting) return { finalized: false };
 
     const byQuestion = new Map(answers.map((a) => [a.questionId, a.evaluation]));
-    const items = questions.map((q) => {
-      const ev = byQuestion.get(q.id);
-      return { value: ev ? (ev.finalScore ?? ev.score ?? 0) : 0, weight: q.points > 0 ? q.points : 1 };
-    });
-    const score = weightedAverage(items) ?? 0;
+    const score = this.computeSectionScore(sa.section.skill, questions, byQuestion);
 
     // Bo'lim bo'yicha umumiy tahlil: mezonlar o'rtachasi va takrorlanmas maslahatlar
     const sums = new Map<string, { total: number; n: number }>();

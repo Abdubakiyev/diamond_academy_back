@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { Role, Skill } from '@prisma/client';
 import type { AuthUser } from '../../common/current-user.decorator';
-import { linearScale, round1 } from '../../common/scoring';
+import { linearScale, round1, scaleFromTable, TABLE_MAX_RAW } from '../../common/scoring';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { ExamService } from '../exam/exam.service';
 import { ConversionQueryDto } from './dto/conversion-query.dto';
@@ -109,34 +109,34 @@ export class ScoreConversionService {
 
   /**
    * To'g'ri javoblar sonini 0-75 ballga o'tkazadi.
-   * Tartib: imtihonning o'z jadvali -> umumiy jadval -> chiziqli hisob.
-   * Jadvalda aniq raw bo'lmasa, undan kichik eng yaqin qator olinadi (eng kichik qatordan pastda — 0).
+   * Tartib:
+   *   1) imtihonning o'z jadvali (admin kiritgan, bazada) — eng yuqori ustuvorlik;
+   *   2) rasmiy jadval (kodda, common/scoring.ts) — 35 savollik Listening / Reading uchun;
+   *   3) chiziqli hisob — boshqa savol sonli (CUSTOM) testlar uchun.
+   * Imtihon jadvalida aniq raw bo'lmasa, undan kichik eng yaqin qator olinadi (eng kichik qatordan pastda — 0).
    */
   async convert(examId: string, skill: Skill, raw: number, maxRaw: number): Promise<{ scaled: number; source: ConversionSource }> {
-    let source: ConversionSource = 'EXAM_TABLE';
-    let rows = await this.prisma.scoreConversion.findMany({
+    const r = Math.floor(raw + 1e-9);
+
+    const rows = await this.prisma.scoreConversion.findMany({
       where: { examId, skill },
       orderBy: { rawScore: 'asc' },
       select: { rawScore: true, scaledScore: true },
     });
 
-    if (rows.length === 0) {
-      source = 'DEFAULT_TABLE';
-      rows = await this.prisma.scoreConversion.findMany({
-        where: { examId: null, skill },
-        orderBy: { rawScore: 'asc' },
-        select: { rawScore: true, scaledScore: true },
-      });
+    if (rows.length > 0) {
+      let scaled = 0;
+      for (const row of rows) {
+        if (row.rawScore <= r) scaled = row.scaledScore;
+        else break;
+      }
+      return { scaled: round1(scaled), source: 'EXAM_TABLE' };
     }
 
-    if (rows.length === 0) return { scaled: linearScale(raw, maxRaw), source: 'LINEAR' };
-
-    const r = Math.floor(raw + 1e-9);
-    let scaled = 0;
-    for (const row of rows) {
-      if (row.rawScore <= r) scaled = row.scaledScore;
-      else break;
+    if ((skill === Skill.LISTENING || skill === Skill.READING) && maxRaw === TABLE_MAX_RAW) {
+      return { scaled: scaleFromTable(skill as 'LISTENING' | 'READING', r), source: 'DEFAULT_TABLE' };
     }
-    return { scaled: round1(scaled), source };
+
+    return { scaled: linearScale(raw, maxRaw), source: 'LINEAR' };
   }
 }
